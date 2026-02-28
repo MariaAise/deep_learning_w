@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Kernel Trick — Deep Dive</title>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #f78166;
+    --accent3: #7ee787;
+    --accent4: #d2a8ff;
+    --red: #ff7b72;
+    --blue: #79c0ff;
+    --green: #7ee787;
+    --yellow: #e3b341;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  .hero {
+    min-height: 45vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 60px 20px 40px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 30% 50%, rgba(88,166,255,0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 50%, rgba(210,168,255,0.06) 0%, transparent 50%);
+    animation: drift 20s ease-in-out infinite alternate;
+  }
+
+  @keyframes drift {
+    0% { transform: translate(0, 0); }
+    100% { transform: translate(-5%, 3%); }
+  }
+
+  .hero h1 {
+    font-family: 'Crimson Pro', serif;
+    font-size: clamp(2.5rem, 6vw, 4.5rem);
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    position: relative;
+    z-index: 1;
+    margin-bottom: 12px;
+  }
+
+  .hero h1 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+
+  .hero .subtitle {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    position: relative;
+    z-index: 1;
+    max-width: 600px;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* Navigation Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 4px;
+    margin: 30px auto 40px;
+    max-width: 700px;
+    border: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .tab {
+    flex: 1;
+    min-width: 120px;
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 9px;
+    transition: all 0.3s;
+  }
+
+  .tab.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .tab:hover:not(.active) {
+    background: var(--surface2);
+    color: var(--text);
+  }
+
+  /* Sections */
+  .section {
+    display: none;
+    animation: fadeIn 0.5s ease;
+  }
+
+  .section.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  h2 {
+    font-family: 'Crimson Pro', serif;
+    font-size: 2rem;
+    font-weight: 400;
+    margin-bottom: 20px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
+
+  h3 {
+    font-family: 'Crimson Pro', serif;
+    font-size: 1.4rem;
+    font-weight: 400;
+    margin: 28px 0 12px;
+    color: var(--accent);
+  }
+
+  p { margin-bottom: 16px; color: var(--text); font-size: 0.98rem; }
+
+  .math-block {
+    background: var(--surface);
+    border-left: 3px solid var(--accent4);
+    padding: 20px 24px;
+    margin: 20px 0;
+    border-radius: 0 8px 8px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.88rem;
+    line-height: 2;
+    overflow-x: auto;
+    color: var(--text);
+  }
+
+  .math-block .comment {
+    color: var(--text-dim);
+    font-style: italic;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .math-block .highlight { color: var(--accent); font-weight: 500; }
+  .math-block .highlight2 { color: var(--accent2); font-weight: 500; }
+  .math-block .highlight3 { color: var(--accent3); font-weight: 500; }
+  .math-block .highlight4 { color: var(--accent4); font-weight: 500; }
+
+  .insight-box {
+    background: linear-gradient(135deg, rgba(88,166,255,0.08), rgba(210,168,255,0.05));
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+
+  .insight-box .label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  .warn-box {
+    background: rgba(247,129,102,0.08);
+    border: 1px solid rgba(247,129,102,0.2);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+
+  .warn-box .label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent2);
+    margin-bottom: 8px;
+  }
+
+  /* Canvas containers */
+  .canvas-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 24px 0;
+    position: relative;
+  }
+
+  .canvas-wrap canvas {
+    width: 100%;
+    border-radius: 8px;
+    display: block;
+  }
+
+  .canvas-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .canvas-controls button {
+    padding: 8px 18px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .canvas-controls button:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .canvas-controls button.active-btn {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .canvas-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  /* Application Cards */
+  .app-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .app-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: all 0.3s;
+  }
+
+  .app-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+
+  .app-card .icon {
+    font-size: 1.6rem;
+    margin-bottom: 10px;
+  }
+
+  .app-card h4 {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+
+  .app-card p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 0;
+    line-height: 1.6;
+  }
+
+  .app-card .kernel-tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(210,168,255,0.15);
+    color: var(--accent4);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 10px;
+  }
+
+  .step-list {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+  }
+
+  .step-list li {
+    counter-increment: step;
+    padding: 12px 0 12px 48px;
+    position: relative;
+    margin-bottom: 4px;
+    font-size: 0.95rem;
+  }
+
+  .step-list li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .footer-note {
+    text-align: center;
+    padding: 50px 20px 30px;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+  }
+
+  /* slider */
+  input[type="range"] {
+    -webkit-appearance: none;
+    background: var(--border);
+    height: 4px;
+    border-radius: 2px;
+    outline: none;
+    width: 150px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  .slider-label {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>The <em>Kernel</em> Trick</h1>
+  <p class="subtitle">How mapping data into higher dimensions makes the impossible linearly separable — without ever computing the mapping.</p>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" onclick="showSection('intuition')">Intuition</button>
+    <button class="tab" onclick="showSection('math')">The Math</button>
+    <button class="tab" onclick="showSection('visual')">Interactive Demo</button>
+    <button class="tab" onclick="showSection('apps')">Applications</button>
+  </div>
+
+  <!-- ==================== SECTION 1: INTUITION ==================== -->
+  <div id="intuition" class="section active">
+    <h2>Why Do We Need Higher Dimensions?</h2>
+
+    <p>Imagine you have red and blue points on a 1D number line, arranged like this: <strong>blue, red, blue</strong>. No single point (threshold) can split red from blue. But if you lift the red point up into 2D, suddenly a line can separate them.</p>
+
+    <p>That's the core insight: <strong>data that is not linearly separable in its original space can become linearly separable in a higher-dimensional space.</strong></p>
+
+    <h3>The XOR Problem — A Classic Example</h3>
+    <p>Consider four points in 2D with labels:</p>
+
+    <div class="math-block">
+      <span class="highlight">(0,0) → class −1</span>    <span class="highlight2">(1,1) → class −1</span><br>
+      <span class="highlight3">(0,1) → class +1</span>    <span class="highlight4">(1,0) → class +1</span>
+    </div>
+
+    <p>No straight line in 2D can separate the two classes. This is the XOR pattern. But watch what happens when we create a new feature z = x₁ · x₂:</p>
+
+    <div class="math-block">
+      (0,0) → z = 0 · 0 = <span class="highlight">0</span>  → class −1<br>
+      (1,1) → z = 1 · 1 = <span class="highlight">1</span>  → class −1<br>
+      (0,1) → z = 0 · 1 = <span class="highlight3">0</span>  → class +1<br>
+      (1,0) → z = 1 · 0 = <span class="highlight3">0</span>  → class +1
+    </div>
+
+    <p>In the 3D space (x₁, x₂, x₁·x₂), the classes are now separable by a plane! But here's the problem…</p>
+
+    <div class="warn-box">
+      <div class="label">The Computational Problem</div>
+      <p>If your data has <em>d</em> features, a polynomial mapping of degree 2 creates <strong>O(d²)</strong> new features. For d = 10,000 (common in text data), that's ~100 million dimensions. Computing and storing these explicitly is extremely expensive — sometimes impossible.</p>
+    </div>
+
+    <div class="insight-box">
+      <div class="label">The Trick</div>
+      <p>Many algorithms (SVM, PCA, etc.) don't need the actual coordinates in the new space. They only need the <strong>dot products</strong> between pairs of data points. A kernel function computes the dot product in the high-dimensional space <em>directly from the original coordinates</em> — without ever constructing the mapped vectors. This is the kernel trick.</p>
+    </div>
+  </div>
+
+  <!-- ==================== SECTION 2: THE MATH ==================== -->
+  <div id="math" class="section">
+    <h2>Mathematical Foundation</h2>
+
+    <h3>Step 1 — The Feature Map</h3>
+    <p>Let φ (phi) be a function that maps input vector <strong>x</strong> from input space ℝᵈ into a higher-dimensional feature space ℝᴰ (where D ≫ d):</p>
+
+    <div class="math-block">
+      φ : ℝᵈ → ℝᴰ<br><br>
+      <span class="comment">// Example: for x = (x₁, x₂) in ℝ², a degree-2 polynomial map:</span><br>
+      φ(x) = (x₁², x₂², <span class="highlight">√2 · x₁ · x₂</span>, <span class="highlight2">√2 · x₁</span>, <span class="highlight3">√2 · x₂</span>, <span class="highlight4">1</span>)<br><br>
+      <span class="comment">// This takes 2D → 6D. Notice the √2 factors — they matter.</span>
+    </div>
+
+    <p>In this 6-dimensional space, a linear classifier (a hyperplane) can separate patterns that were hopelessly non-linear in the original 2D space.</p>
+
+    <h3>Step 2 — Why Dot Products Are Enough</h3>
+    <p>Many ML algorithms can be reformulated so that data points <strong>x</strong> only appear inside dot products ⟨xᵢ, xⱼ⟩. This is called the "dual form." For instance, the SVM decision function in dual form is:</p>
+
+    <div class="math-block">
+      f(x) = sign( Σᵢ αᵢ · yᵢ · <span class="highlight">⟨xᵢ, x⟩</span> + b )<br><br>
+      <span class="comment">// αᵢ are learned weights, yᵢ are labels</span><br>
+      <span class="comment">// The ONLY place data appears is inside the dot product ⟨xᵢ, x⟩</span>
+    </div>
+
+    <p>If we want to work in the higher-dimensional space, we'd replace every dot product with the mapped version:</p>
+
+    <div class="math-block">
+      ⟨xᵢ, xⱼ⟩  →  ⟨<span class="highlight2">φ(xᵢ)</span>, <span class="highlight2">φ(xⱼ)</span>⟩
+    </div>
+
+    <p>But computing φ(x) explicitly is expensive. Enter the kernel function.</p>
+
+    <h3>Step 3 — The Kernel Function</h3>
+    <p>A kernel function K computes the dot product in feature space directly:</p>
+
+    <div class="math-block">
+      <span class="highlight">K(xᵢ, xⱼ) = ⟨φ(xᵢ), φ(xⱼ)⟩</span><br><br>
+      <span class="comment">// We NEVER compute φ(x). We just evaluate K.</span>
+    </div>
+
+    <h3>Proof: Polynomial Kernel</h3>
+    <p>Let's verify this concretely. Take x = (x₁, x₂) and z = (z₁, z₂). Define:</p>
+
+    <div class="math-block">
+      K(x, z) = (<span class="highlight">⟨x, z⟩ + 1</span>)²  = (x₁z₁ + x₂z₂ + 1)²<br><br>
+      <span class="comment">// Expand the square:</span><br>
+      = x₁²z₁² + x₂²z₂² + <span class="highlight2">2·x₁x₂·z₁z₂</span> + <span class="highlight3">2·x₁z₁</span> + <span class="highlight4">2·x₂z₂</span> + 1<br><br>
+      <span class="comment">// Now look at the dot product ⟨φ(x), φ(z)⟩ where:</span><br>
+      φ(x) = (x₁², x₂², √2·x₁x₂, √2·x₁, √2·x₂, 1)<br>
+      φ(z) = (z₁², z₂², √2·z₁z₂, √2·z₁, √2·z₂, 1)<br><br>
+      ⟨φ(x), φ(z)⟩ = x₁²z₁² + x₂²z₂² + 2·x₁x₂z₁z₂ + 2·x₁z₁ + 2·x₂z₂ + 1<br><br>
+      <span class="highlight">∴ K(x, z) = ⟨φ(x), φ(z)⟩  ✓</span><br><br>
+      <span class="comment">// Cost of φ then dot product: O(D) where D=6</span><br>
+      <span class="comment">// Cost of K directly: O(d) where d=2 — just one dot product + squaring</span>
+    </div>
+
+    <div class="insight-box">
+      <div class="label">Why the √2 factors?</div>
+      <p>They ensure the algebraic identity holds exactly. The feature map isn't arbitrary — it's reverse-engineered from the kernel so that the dot product in feature space equals K(x,z). The √2 comes from the cross terms when expanding the polynomial.</p>
+    </div>
+
+    <h3>Step 4 — Common Kernels and Their Implicit Spaces</h3>
+
+    <div class="math-block">
+      <span class="highlight">Linear:</span>      K(x,z) = ⟨x, z⟩<br>
+      <span class="comment">  → φ is the identity. Implicit dim = d. No trick needed.</span><br><br>
+
+      <span class="highlight2">Polynomial:</span>  K(x,z) = (⟨x,z⟩ + c)ᵖ<br>
+      <span class="comment">  → Implicit dim = C(d+p, p). For d=100, p=3: dim ≈ 176,851</span><br><br>
+
+      <span class="highlight3">RBF/Gaussian:</span> K(x,z) = exp(−γ‖x−z‖²)<br>
+      <span class="comment">  → Implicit dim = ∞ (infinite-dimensional Hilbert space!)</span><br>
+      <span class="comment">  → Taylor expand the exponential: you get ALL polynomial degrees</span><br><br>
+
+      <span class="highlight4">Sigmoid:</span>      K(x,z) = tanh(α⟨x,z⟩ + c)<br>
+      <span class="comment">  → Mimics a neural network. Not always a valid kernel (positive semi-definite only for some α, c)</span>
+    </div>
+
+    <h3>Step 5 — Mercer's Theorem (Validity Condition)</h3>
+    <p>Not every function of two arguments is a valid kernel. Mercer's theorem tells us when a function K qualifies:</p>
+
+    <div class="math-block">
+      <span class="comment">// K is a valid kernel if and only if for ANY set of points {x₁,...,xₙ},</span><br>
+      <span class="comment">// the Gram matrix G is positive semi-definite:</span><br><br>
+
+      G_ij = K(xᵢ, xⱼ)<br><br>
+
+      <span class="highlight">∀ c ∈ ℝⁿ:  cᵀGc ≥ 0</span><br><br>
+
+      <span class="comment">// Conceptually: K must correspond to a REAL dot product</span><br>
+      <span class="comment">// in SOME feature space. PSD guarantees this space exists.</span>
+    </div>
+
+    <div class="insight-box">
+      <div class="label">The Deep Meaning</div>
+      <p>The kernel trick is not just a computational shortcut. It's a fundamental insight: <strong>you can define similarity in an infinite-dimensional space without ever representing points in that space.</strong> The kernel IS the geometry of the feature space — you don't need coordinates, you only need pairwise relationships.</p>
+    </div>
+  </div>
+
+  <!-- ==================== SECTION 3: INTERACTIVE DEMO ==================== -->
+  <div id="visual" class="section">
+    <h2>Interactive Visualizations</h2>
+
+    <h3>Demo 1 — 2D Data: Linear vs. Kernel Separation</h3>
+    <p>Click "Generate" to create XOR-like data (not linearly separable). Then switch between linear and RBF kernel to see how the decision boundary changes.</p>
+
+    <div class="canvas-wrap">
+      <canvas id="canvas2d" width="700" height="400"></canvas>
+      <div class="canvas-controls">
+        <button onclick="generate2D()" class="active-btn">Generate Data</button>
+        <button id="btnLinear" onclick="setMode2D('linear')">Linear Boundary</button>
+        <button id="btnRBF" onclick="setMode2D('rbf')" class="active-btn">RBF Kernel Boundary</button>
+        <span class="slider-label">γ = <span id="gammaVal">1.0</span></span>
+        <input type="range" min="0.2" max="5" step="0.1" value="1.0" oninput="updateGamma(this.value)">
+      </div>
+      <div class="canvas-label">Red & blue classes in an XOR-like arrangement. The RBF kernel maps to infinite dimensions, creating a non-linear boundary.</div>
+    </div>
+
+    <h3>Demo 2 — Lifting to 3D: See the Separating Hyperplane</h3>
+    <p>Watch 2D circular data get mapped via φ(x₁,x₂) = (x₁², x₂², √2·x₁·x₂). In the new 3D space, a flat plane separates what was a circle.</p>
+
+    <div class="canvas-wrap">
+      <canvas id="canvas3d" width="700" height="420"></canvas>
+      <div class="canvas-controls">
+        <button onclick="generate3D()">New Data</button>
+        <button id="btnOrig" onclick="setView3D('original')" class="active-btn">Original 2D</button>
+        <button id="btnMapped" onclick="setView3D('mapped')">Mapped to 3D</button>
+        <span class="slider-label">Rotate: <span id="rotVal">0°</span></span>
+        <input type="range" min="0" max="360" step="1" value="30" oninput="updateRotation(this.value)" id="rotSlider">
+      </div>
+      <div class="canvas-label">Circle data in 2D lifted via polynomial feature map. The separating plane in 3D projects back as a circle in 2D.</div>
+    </div>
+
+    <h3>Demo 3 — Kernel Values Heatmap</h3>
+    <p>This shows what different kernels "see" as similarity. The RBF kernel creates a localized similarity bubble, while polynomial kernels create broader, directional patterns.</p>
+
+    <div class="canvas-wrap">
+      <canvas id="canvasHeat" width="700" height="300"></canvas>
+      <div class="canvas-controls">
+        <button id="heatLinear" onclick="setHeatKernel('linear')">Linear</button>
+        <button id="heatPoly" onclick="setHeatKernel('poly')">Polynomial (p=2)</button>
+        <button id="heatRBF" onclick="setHeatKernel('rbf')" class="active-btn">RBF (Gaussian)</button>
+      </div>
+      <div class="canvas-label">Kernel value K(x₀, x) for a fixed point x₀ at center. Brightness = higher similarity in the implicit feature space.</div>
+    </div>
+  </div>
+
+  <!-- ==================== SECTION 4: APPLICATIONS ==================== -->
+  <div id="apps" class="section">
+    <h2>Applications Beyond SVM</h2>
+
+    <p>The kernel trick is far more general than SVMs. Any algorithm whose computation can be expressed purely in terms of dot products between data points can be "kernelized." Here are the major areas:</p>
+
+    <div class="app-grid">
+      <div class="app-card">
+        <div class="icon">📊</div>
+        <h4>Kernel PCA</h4>
+        <p>Standard PCA finds linear principal components. Kernel PCA finds non-linear manifolds by performing PCA in the implicit feature space. Used extensively in face recognition and image denoising.</p>
+        <span class="kernel-tag">RBF, Polynomial</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">📈</div>
+        <h4>Gaussian Processes</h4>
+        <p>The covariance function in a GP IS a kernel. It defines the smoothness and structure of the function being learned. GPs provide full uncertainty estimates — used in Bayesian optimization, active learning, and surrogate modeling.</p>
+        <span class="kernel-tag">RBF, Matérn, Periodic</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🧬</div>
+        <h4>Bioinformatics</h4>
+        <p>String kernels compare DNA/protein sequences by counting shared subsequences — no numeric vector representation needed. The kernel operates directly on strings, enabling classification of gene families and protein functions.</p>
+        <span class="kernel-tag">String, Spectrum, Mismatch</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">📝</div>
+        <h4>Natural Language Processing</h4>
+        <p>Tree kernels compare parse trees of sentences; bag-of-words kernels compare documents. These enable ML on structured text without manual feature engineering. Used in relation extraction and semantic similarity.</p>
+        <span class="kernel-tag">Tree, BoW, WMD</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🔍</div>
+        <h4>Kernel K-Means & Spectral Clustering</h4>
+        <p>Standard k-means finds spherical clusters. Kernel k-means can find arbitrarily shaped clusters by implicitly working in feature space. Spectral clustering uses the kernel matrix eigenvalues for graph partitioning.</p>
+        <span class="kernel-tag">RBF, Custom graph kernels</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🎯</div>
+        <h4>Kernel Ridge Regression</h4>
+        <p>Adds kernel power to ridge regression. Learns non-linear functions with closed-form solution. Computationally simpler than neural nets for moderate datasets. Widely used in chemoinformatics for molecular property prediction.</p>
+        <span class="kernel-tag">RBF, Tanimoto</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🧠</div>
+        <h4>Neural Tangent Kernel (NTK)</h4>
+        <p>Deep learning connection: infinitely wide neural networks converge to a kernel method (the NTK). This provides theoretical tools to analyze neural network training dynamics, convergence, and generalization.</p>
+        <span class="kernel-tag">NTK (implicit)</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🔊</div>
+        <h4>Signal Processing & Time Series</h4>
+        <p>Time-warping kernels compare time series with different speeds. Convolution kernels combine local feature kernels for audio classification. Used in speech recognition, EEG analysis, and financial time series.</p>
+        <span class="kernel-tag">DTW, Convolution, RBF</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🌐</div>
+        <h4>Graph Kernels</h4>
+        <p>Compare entire graphs by decomposing them into substructures (walks, paths, subtrees). Critical in computational chemistry (comparing molecules), social network analysis, and program analysis.</p>
+        <span class="kernel-tag">Weisfeiler-Leman, Random Walk</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">📐</div>
+        <h4>Kernel CCA (Canonical Correlation)</h4>
+        <p>Finds non-linear correlations between two datasets (e.g., images and captions). Used in multi-view learning, cross-modal retrieval, and multi-modal data fusion.</p>
+        <span class="kernel-tag">RBF, Domain-specific</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">🏗️</div>
+        <h4>RKHS Embeddings (Kernel Mean)</h4>
+        <p>Entire probability distributions can be embedded into a kernel space as single points. Enables comparing distributions, two-sample tests (MMD), and independence tests (HSIC) — fundamental in causal discovery.</p>
+        <span class="kernel-tag">Characteristic kernels</span>
+      </div>
+      <div class="app-card">
+        <div class="icon">💡</div>
+        <h4>Reinforcement Learning</h4>
+        <p>Kernel-based value function approximation provides smooth interpolation with convergence guarantees. GPTD (Gaussian Process Temporal Difference) uses kernels for RL with uncertainty. Useful when data efficiency matters.</p>
+        <span class="kernel-tag">RBF, Matérn</span>
+      </div>
+    </div>
+
+    <div class="insight-box">
+      <div class="label">The Unifying Principle</div>
+      <p>The kernel trick works everywhere a dot product appears. The recipe: (1) Take any linear algorithm, (2) rewrite it so data only appears in dot products (dual form), (3) replace ⟨xᵢ, xⱼ⟩ with K(xᵢ, xⱼ). Congratulations — you've made a non-linear algorithm without changing the algorithm's structure.</p>
+    </div>
+  </div>
+</div>
+
+<div class="footer-note">Interactive educational resource on the Kernel Trick</div>
+
+<script>
+// ==================== DEMO 1: 2D Classification ====================
+let points2D = [];
+let mode2D = 'rbf';
+let gamma = 1.0;
+
+function generate2D() {
+  points2D = [];
+  const n = 80;
+  for (let i = 0; i < n; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const classId = (i < n / 2) ? 1 : -1;
+    let x, y;
+    if (classId === 1) {
+      // Inner cluster (two blobs at diagonal)
+      if (Math.random() < 0.5) {
+        x = 0.25 + (Math.random() - 0.5) * 0.25;
+        y = 0.25 + (Math.random() - 0.5) * 0.25;
+      } else {
+        x = 0.75 + (Math.random() - 0.5) * 0.25;
+        y = 0.75 + (Math.random() - 0.5) * 0.25;
+      }
+    } else {
+      if (Math.random() < 0.5) {
+        x = 0.75 + (Math.random() - 0.5) * 0.25;
+        y = 0.25 + (Math.random() - 0.5) * 0.25;
+      } else {
+        x = 0.25 + (Math.random() - 0.5) * 0.25;
+        y = 0.75 + (Math.random() - 0.5) * 0.25;
+      }
+    }
+    points2D.push({ x, y, c: classId });
+  }
+  draw2D();
+}
+
+function rbfKernel(a, b, g) {
+  const dx = a.x - b.x, dy = a.y - b.y;
+  return Math.exp(-g * (dx * dx + dy * dy));
+}
+
+function classify2D(px, py) {
+  if (mode2D === 'linear') {
+    // Simple linear: majority vote weighted by dot product
+    let score = 0;
+    for (const p of points2D) {
+      score += p.c * (p.x * px + p.y * py);
+    }
+    return score;
+  } else {
+    // RBF kernel weighted vote
+    let score = 0;
+    for (const p of points2D) {
+      const k = rbfKernel({ x: px, y: py }, p, gamma * 10);
+      score += p.c * k;
+    }
+    return score;
+  }
+}
+
+function draw2D() {
+  const canvas = document.getElementById('canvas2d');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Decision boundary heatmap
+  const step = 6;
+  for (let px = 0; px < W; px += step) {
+    for (let py = 0; py < H; py += step) {
+      const nx = px / W, ny = py / H;
+      const score = classify2D(nx, ny);
+      const intensity = Math.min(Math.abs(score) * 0.15, 0.5);
+      if (score > 0) {
+        ctx.fillStyle = `rgba(88,166,255,${intensity})`;
+      } else {
+        ctx.fillStyle = `rgba(255,123,114,${intensity})`;
+      }
+      ctx.fillRect(px, py, step, step);
+    }
+  }
+
+  // Decision boundary contour (score ≈ 0)
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let px = 0; px < W; px += 3) {
+    for (let py = 0; py < H; py += 3) {
+      const s = classify2D(px / W, py / H);
+      if (Math.abs(s) < 0.3) {
+        ctx.rect(px, py, 2, 2);
+      }
+    }
+  }
+  ctx.stroke();
+
+  // Points
+  for (const p of points2D) {
+    ctx.beginPath();
+    ctx.arc(p.x * W, p.y * H, 5, 0, Math.PI * 2);
+    ctx.fillStyle = p.c === 1 ? '#58a6ff' : '#ff7b72';
+    ctx.fill();
+    ctx.strokeStyle = '#0d1117';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+function setMode2D(m) {
+  mode2D = m;
+  document.getElementById('btnLinear').classList.toggle('active-btn', m === 'linear');
+  document.getElementById('btnRBF').classList.toggle('active-btn', m === 'rbf');
+  draw2D();
+}
+
+function updateGamma(v) {
+  gamma = parseFloat(v);
+  document.getElementById('gammaVal').textContent = gamma.toFixed(1);
+  draw2D();
+}
+
+// ==================== DEMO 2: 3D Lifting ====================
+let points3D = [];
+let view3D = 'original';
+let rotation = 30;
+
+function generate3D() {
+  points3D = [];
+  const n = 120;
+  for (let i = 0; i < n; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const classId = (i < n / 2) ? 1 : -1;
+    let r;
+    if (classId === 1) {
+      r = 0.15 + Math.random() * 0.12;
+    } else {
+      r = 0.35 + Math.random() * 0.12;
+    }
+    const x = 0.5 + r * Math.cos(angle);
+    const y = 0.5 + r * Math.sin(angle);
+    points3D.push({ x, y, c: classId });
+  }
+  draw3D();
+}
+
+function draw3D() {
+  const canvas = document.getElementById('canvas3d');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  if (view3D === 'original') {
+    // Draw circle boundary hint
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(W / 2, H / 2, 0.27 * Math.min(W, H), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // "No linear boundary" line
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(50, H / 2);
+    ctx.lineTo(W - 50, H / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '13px "DM Sans"';
+    ctx.fillText('No single line separates the classes', W / 2 - 130, H - 25);
+
+    for (const p of points3D) {
+      ctx.beginPath();
+      ctx.arc(p.x * W, p.y * H, 4, 0, Math.PI * 2);
+      ctx.fillStyle = p.c === 1 ? '#58a6ff' : '#ff7b72';
+      ctx.fill();
+    }
+  } else {
+    // 3D projection with rotation
+    const rad = rotation * Math.PI / 180;
+    const cosR = Math.cos(rad), sinR = Math.sin(rad);
+    const tilt = 0.6;
+
+    // Map points to 3D: φ(x1,x2) = (x1², x2², √2·x1·x2)
+    const mapped = points3D.map(p => {
+      const x1 = (p.x - 0.5) * 2, x2 = (p.y - 0.5) * 2;
+      const z1 = x1 * x1;
+      const z2 = x2 * x2;
+      const z3 = Math.sqrt(2) * x1 * x2;
+      // Rotate around Y axis
+      const rx = z1 * cosR + z3 * sinR;
+      const ry = z2;
+      const rz = -z1 * sinR + z3 * cosR;
+      // Simple perspective
+      const scale = 150;
+      const px = W / 2 + rx * scale;
+      const py = H / 2 - ry * scale * tilt + rz * scale * 0.3;
+      return { px, py, depth: rz, c: p.c, z1, z2, z3 };
+    });
+
+    // Sort by depth
+    mapped.sort((a, b) => a.depth - b.depth);
+
+    // Draw separating plane hint
+    ctx.fillStyle = 'rgba(126,231,135,0.06)';
+    ctx.strokeStyle = 'rgba(126,231,135,0.3)';
+    ctx.lineWidth = 1;
+    const planeY = H / 2 - 0.15 * 150 * tilt;
+    ctx.fillRect(W * 0.15, planeY - 30, W * 0.7, 60);
+    ctx.strokeRect(W * 0.15, planeY - 30, W * 0.7, 60);
+
+    ctx.fillStyle = 'rgba(126,231,135,0.5)';
+    ctx.font = '12px "DM Sans"';
+    ctx.fillText('Separating hyperplane', W / 2 - 70, planeY - 35);
+
+    for (const p of mapped) {
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, 4, 0, Math.PI * 2);
+      ctx.fillStyle = p.c === 1 ? '#58a6ff' : '#ff7b72';
+      ctx.globalAlpha = 0.4 + 0.6 * ((p.depth + 1.5) / 3);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Axes
+    const axLen = 60;
+    const axes = [
+      { dx: cosR, dy: 0, dz: sinR, label: 'x₁²', color: '#58a6ff' },
+      { dx: 0, dy: -tilt, dz: 0.3, label: 'x₂²', color: '#ff7b72' },
+      { dx: sinR, dy: 0, dz: -cosR, label: '√2·x₁x₂', color: '#d2a8ff' },
+    ];
+    for (const ax of axes) {
+      ctx.strokeStyle = ax.color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(80, H - 60);
+      ctx.lineTo(80 + ax.dx * axLen, H - 60 + ax.dy * axLen + ax.dz * axLen * 0.3);
+      ctx.stroke();
+      ctx.fillStyle = ax.color;
+      ctx.font = '11px "JetBrains Mono"';
+      ctx.fillText(ax.label, 80 + ax.dx * axLen + 5, H - 60 + ax.dy * axLen + ax.dz * axLen * 0.3);
+    }
+  }
+}
+
+function setView3D(v) {
+  view3D = v;
+  document.getElementById('btnOrig').classList.toggle('active-btn', v === 'original');
+  document.getElementById('btnMapped').classList.toggle('active-btn', v === 'mapped');
+  draw3D();
+}
+
+function updateRotation(v) {
+  rotation = parseFloat(v);
+  document.getElementById('rotVal').textContent = v + '°';
+  draw3D();
+}
+
+// ==================== DEMO 3: Kernel Heatmap ====================
+let heatKernel = 'rbf';
+
+function drawHeatmap() {
+  const canvas = document.getElementById('canvasHeat');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const cx = 0.5, cy = 0.5; // fixed reference point
+  const step = 4;
+
+  for (let px = 0; px < W; px += step) {
+    for (let py = 0; py < H; py += step) {
+      const nx = px / W, ny = py / H;
+      let val;
+      const dx = nx - cx, dy = ny - cy;
+
+      if (heatKernel === 'linear') {
+        val = (nx * cx + ny * cy);
+        val = val / 0.5; // normalize
+      } else if (heatKernel === 'poly') {
+        val = Math.pow(nx * cx + ny * cy + 0.1, 2);
+        val = val / 0.4;
+      } else {
+        val = Math.exp(-12 * (dx * dx + dy * dy));
+      }
+
+      val = Math.max(0, Math.min(1, val));
+
+      // Color map: dark blue → cyan → yellow → white
+      let r, g, b;
+      if (val < 0.33) {
+        const t = val / 0.33;
+        r = Math.floor(13 + t * 30);
+        g = Math.floor(17 + t * 80);
+        b = Math.floor(34 + t * 120);
+      } else if (val < 0.66) {
+        const t = (val - 0.33) / 0.33;
+        r = Math.floor(43 + t * 180);
+        g = Math.floor(97 + t * 100);
+        b = Math.floor(154 - t * 50);
+      } else {
+        const t = (val - 0.66) / 0.34;
+        r = Math.floor(223 + t * 32);
+        g = Math.floor(197 + t * 58);
+        b = Math.floor(104 + t * 151);
+      }
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(px, py, step, step);
+    }
+  }
+
+  // Mark center point
+  ctx.beginPath();
+  ctx.arc(cx * W, cy * H, 6, 0, Math.PI * 2);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px "DM Sans"';
+  ctx.fillText('x₀', cx * W + 10, cy * H - 10);
+}
+
+function setHeatKernel(k) {
+  heatKernel = k;
+  document.getElementById('heatLinear').classList.toggle('active-btn', k === 'linear');
+  document.getElementById('heatPoly').classList.toggle('active-btn', k === 'poly');
+  document.getElementById('heatRBF').classList.toggle('active-btn', k === 'rbf');
+  drawHeatmap();
+}
+
+// Initialize
+generate2D();
+generate3D();
+drawHeatmap();
+</script>
+</body>
+</html>
